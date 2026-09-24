@@ -4,9 +4,7 @@
 
 # 构建产物：xcframework 由 Scripts/build-ffmpeg.sh 本地生成
 Artifacts/*.xcframework
-
-# ffmpeg 头文件私有拷贝（由构建脚本从产物同步生成）
-Sources/CFFmpegAudio/ffmpeg/
+*.xcframework.zip
 
 # SwiftPM
 .build/

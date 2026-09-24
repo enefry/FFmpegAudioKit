@@ -11,7 +11,8 @@
 
 ```
 Scripts/build-ffmpeg.sh            从源码 audio-only 交叉编译 → xcframework
-Artifacts/FFmpegAudio.xcframework  构建产物（动态 FFmpegAudio.framework，需先跑脚本生成）
+Artifacts/FFmpegAudio.xcframework  本地构建产物（不入 git；缺省时从 GitHub Release 下载）
+.github/workflows/release.yml      构建并发布 Release
 Sources/CFFmpegAudio/              C wrapper：decode / seek / probe / metadata
 Sources/FFmpegAudioKit/            通用 Swift API（零业务依赖）
     FFmpegAudioDecoder             解码：PCM → AVAudioPCMBuffer（非交错 planar Float32）
@@ -19,9 +20,28 @@ Sources/FFmpegAudioKit/            通用 Swift API（零业务依赖）
     FFmpegMetadataReader           元数据：标签 + 内嵌封面
 ```
 
+## 依赖
+
+```swift
+.package(url: "https://github.com/enefry/FFmpegAudioKit.git", from: "1.0.0")
+```
+
+预编译的 `FFmpegAudio.xcframework.zip` 随 [GitHub Release](https://github.com/enefry/FFmpegAudioKit/releases)
+发布，`Package.swift` 中固定了对应版本的下载地址与 checksum，使用方无需本地编译 ffmpeg。
+若本地存在 `Artifacts/FFmpegAudio.xcframework`（跑过构建脚本），清单会优先使用本地产物。
+
+## 发布
+
+在 GitHub Actions 手动运行 **Release** workflow 并填写版本号（如 `1.0.0`）。流程会从源码构建
+xcframework、跑测试、打包 zip、改写 `Package.swift` 的 URL/checksum 并提交，再打 tag 发布 Release，
+最后删除本地产物、从 Release 下载校验一遍。
+
+ffmpeg 头文件（`Sources/CFFmpegAudio/ffmpeg`）随源码提交；升级 `FFMPEG_VERSION` 时需本地重跑构建脚本并
+提交新的头文件，否则 Release 流程会因头文件与产物不一致而失败。
+
 ## 构建 xcframework
 
-`Artifacts/FFmpegAudio.xcframework` 不入 git，首次使用前需本地生成：
+`Artifacts/FFmpegAudio.xcframework` 不入 git；需要修改或调试 ffmpeg 时本地生成：
 
 ```sh
 ./Scripts/build-ffmpeg.sh
@@ -32,7 +52,7 @@ Sources/FFmpegAudioKit/            通用 Swift API（零业务依赖）
 1. 下载 pinned 版本 ffmpeg 源码（默认 `8.1.2`，缓存于 `.build-ffmpeg/`，不入 git）。
 2. audio-only configure，交叉编译三片：`arm64-iphoneos`、`arm64-iphonesimulator`、`x86_64-iphonesimulator`（部署目标 iOS 17.0）。
 3. 合并静态库并 `xcodebuild -create-xcframework`，产出 `ios-arm64` + `ios-arm64_x86_64-simulator`，每片为一个**动态** `FFmpegAudio.framework`。
-4. 同步头文件到 `Sources/CFFmpegAudio/ffmpeg`（命令行 SwiftPM 构建下的私有 include 拷贝）。
+4. 同步头文件到 `Sources/CFFmpegAudio/ffmpeg`（C wrapper 编译用的私有 include 拷贝，随源码提交）。
 
 可通过环境变量覆盖：`FFMPEG_VERSION`、`FFMPEG_URL`、`DEPLOY_TARGET`。
 

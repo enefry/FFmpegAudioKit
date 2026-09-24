@@ -40,10 +40,14 @@ COMMON_CONFIG=(
   --disable-programs --disable-doc --disable-htmlpages --disable-manpages
   --disable-avdevice --disable-avfilter --disable-swscale
   --disable-network --disable-everything
+  # 关掉自动探测：否则 SDK 存在时会带入 videotoolbox/vulkan 等视频硬解对象，
+  # 造成 audio-only 动态链接缺符号或重复符号。只显式点亮真正需要的能力。
+  --disable-autodetect
   --disable-shared --enable-static --enable-pic
   --enable-avcodec --enable-avformat --enable-swresample
   --enable-protocol=file
   --enable-audiotoolbox
+  --enable-zlib --enable-iconv
 )
 DECODERS="aac,aac_latm,aac_at,mp3,mp3float,mp3_at,flac,alac,alac_at,vorbis,opus,\
 pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_f32le,pcm_u8,\
@@ -138,14 +142,69 @@ for m in "${LIBS[@]}"; do
   cp -R "${PREFIX_ROOT}/iphoneos-arm64/include/${m}" "${HEADERS_DIR}/${m}"
 done
 
-# --- 5. 组装 xcframework -----------------------------------------------------
+# --- 5. 把静态库整体链接进单个动态 framework -------------------------------
+# LGPL 合规：framework 内只含 ffmpeg 代码，动态链接可被用户替换/重链，
+# 因此使用方 App 可闭源。ffmpeg 自身外部依赖 + 系统框架必须在此链入，
+# 否则运行期 dylib 缺符号无法加载。
+FW_NAME="FFmpegAudio"
+FW_LINK_FLAGS=(
+  -lz -lbz2 -liconv
+  -framework AudioToolbox -framework CoreMedia -framework CoreVideo
+  -framework CoreFoundation
+)
+
+# 用法：make_framework <slice-dir> <sdk> <min-flag> <arch-flags...>
+make_framework() {
+  local slice="$1" sdk="$2" minflag="$3"; shift 3
+  local arch_flags=("$@")
+  local sysroot cc fwdir platforms
+  sysroot="$(xcrun -sdk "${sdk}" --show-sdk-path)"
+  cc="$(xcrun -find -sdk "${sdk}" clang)"
+  fwdir="${STAGE_DIR}/${slice}/${FW_NAME}.framework"
+
+  log "链接动态 framework：${slice} …"
+  rm -rf "${fwdir}"
+  mkdir -p "${fwdir}"
+
+  "${cc}" -dynamiclib \
+    "${arch_flags[@]}" \
+    -isysroot "${sysroot}" \
+    "${minflag}=${DEPLOY_TARGET}" \
+    -install_name "@rpath/${FW_NAME}.framework/${FW_NAME}" \
+    -Wl,-force_load,"${STAGE_DIR}/${slice}/libffmpeg.a" \
+    "${FW_LINK_FLAGS[@]}" \
+    -o "${fwdir}/${FW_NAME}"
+
+  if [ "${sdk}" = "iphoneos" ]; then platforms="iPhoneOS"; else platforms="iPhoneSimulator"; fi
+  cat > "${fwdir}/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>${FW_NAME}</string>
+  <key>CFBundleIdentifier</key><string>org.ffmpeg.${FW_NAME}</string>
+  <key>CFBundleName</key><string>${FW_NAME}</string>
+  <key>CFBundlePackageType</key><string>FMWK</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>${FFMPEG_VERSION}</string>
+  <key>CFBundleVersion</key><string>${FFMPEG_VERSION}</string>
+  <key>MinimumOSVersion</key><string>${DEPLOY_TARGET}</string>
+  <key>CFBundleSupportedPlatforms</key><array><string>${platforms}</string></array>
+</dict>
+</plist>
+PLIST
+}
+make_framework device iphoneos        -mios-version-min           -arch arm64
+make_framework sim    iphonesimulator -mios-simulator-version-min -arch arm64 -arch x86_64
+
+# --- 6. 组装 xcframework（动态 framework 版）--------------------------------
 log "创建 xcframework …"
 xcodebuild -create-xcframework \
-  -library "${STAGE_DIR}/device/libffmpeg.a" -headers "${HEADERS_DIR}" \
-  -library "${STAGE_DIR}/sim/libffmpeg.a"    -headers "${HEADERS_DIR}" \
+  -framework "${STAGE_DIR}/device/${FW_NAME}.framework" \
+  -framework "${STAGE_DIR}/sim/${FW_NAME}.framework" \
   -output "${XCFRAMEWORK}"
 
-# --- 6. 同步头文件到 C wrapper（SwiftPM 命令行构建下 include 私有拷贝） ------
+# --- 7. 同步头文件到 C wrapper（SwiftPM 命令行构建下 include 私有拷贝） ------
 CSHIM_FFMPEG_DIR="${PKG_DIR}/Sources/CFFmpegAudio/ffmpeg"
 log "同步头文件到 C wrapper：${CSHIM_FFMPEG_DIR}"
 rm -rf "${CSHIM_FFMPEG_DIR}"

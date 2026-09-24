@@ -22,7 +22,8 @@ typedef enum {
     FFAUDIO_ERR_DECODE = -5,        ///< 解码过程出错
     FFAUDIO_ERR_SEEK = -6,          ///< seek 失败
     FFAUDIO_ERR_ALLOC = -7,         ///< 内存分配失败
-    FFAUDIO_ERR_ARG = -8            ///< 参数非法
+    FFAUDIO_ERR_ARG = -8,           ///< 参数非法
+    FFAUDIO_ERR_IO = -9             ///< 读取输入出错（区别于正常到达文件尾）
 } FFAudioStatus;
 
 // MARK: - 解码
@@ -39,6 +40,27 @@ typedef struct {
 
 /// 打开本地文件，成功返回句柄，失败返回 NULL 并把错误码写入 out_status。
 FFAudioDecoder *ffaudio_open_file(const char *path, int32_t *out_status);
+
+/// `seek` 回调的特殊 whence：只返回输入总字节数（未知返回负值），不移动位置。
+#define FFAUDIO_SEEK_SIZE 0x10000
+
+/// 调用方提供的字节输入（例如网络流）。回调在调用 decoder 的线程上同步执行，
+/// 可阻塞等待数据。
+typedef struct {
+    void *opaque;
+    /// 读取最多 size 字节到 buf。返回读到的字节数，0 表示输入结束，<0 表示出错。
+    int32_t (*read)(void *opaque, uint8_t *buf, int32_t size);
+    /// whence 为 SEEK_SET / SEEK_CUR / SEEK_END 或 FFAUDIO_SEEK_SIZE。
+    /// 返回新位置（FFAUDIO_SEEK_SIZE 时返回总字节数），<0 表示失败。
+    /// 不可 seek 的输入传 NULL。
+    int64_t (*seek)(void *opaque, int64_t offset, int32_t whence);
+} FFAudioIOCallbacks;
+
+/// 以自定义字节输入打开解码器。probe_size_bytes > 0 时限制容器探测读取量
+/// （控制网络起播耗时），<=0 用 ffmpeg 默认值。opaque 由调用方管理生命周期，
+/// 须在 ffaudio_close 之后才能释放。
+FFAudioDecoder *ffaudio_open_io(
+    FFAudioIOCallbacks callbacks, int64_t probe_size_bytes, int32_t *out_status);
 
 /// 返回输出 PCM 规格（交错 Float32）。
 FFAudioFormat ffaudio_format(const FFAudioDecoder *decoder);

@@ -34,6 +34,10 @@ struct FFAudioDecoder {
     int hold_offset;
 
     int reached_eof;
+
+    // 自定义输入（ffaudio_open_io）时持有；本地文件为 NULL。
+    AVIOContext *avio;
+    FFAudioIOCallbacks io;
 };
 
 static void ffaudio_free_internal(FFAudioDecoder *d) {
@@ -43,9 +47,16 @@ static void ffaudio_free_internal(FFAudioDecoder *d) {
     if (d->packet) av_packet_free(&d->packet);
     if (d->codec_ctx) avcodec_free_context(&d->codec_ctx);
     if (d->format_ctx) avformat_close_input(&d->format_ctx);
+    // AVFMT_FLAG_CUSTOM_IO 下 avformat_close_input 不释放 pb，需自行释放。
+    if (d->avio) {
+        av_freep(&d->avio->buffer);
+        avio_context_free(&d->avio);
+    }
     free(d->hold);
     free(d);
 }
+
+static FFAudioDecoder *ffaudio_finish_open(FFAudioDecoder *d, int32_t *out_status);
 
 FFAudioDecoder *ffaudio_open_file(const char *path, int32_t *out_status) {
     if (out_status) *out_status = FFAUDIO_OK;
@@ -66,6 +77,83 @@ FFAudioDecoder *ffaudio_open_file(const char *path, int32_t *out_status) {
         ffaudio_free_internal(d);
         return NULL;
     }
+    return ffaudio_finish_open(d, out_status);
+}
+
+static int ffaudio_io_read(void *opaque, uint8_t *buf, int size) {
+    FFAudioDecoder *d = opaque;
+    int32_t n = d->io.read(d->io.opaque, buf, size);
+    if (n == 0) return AVERROR_EOF;
+    if (n < 0) return AVERROR(EIO);
+    return n;
+}
+
+static int64_t ffaudio_io_seek(void *opaque, int64_t offset, int whence) {
+    FFAudioDecoder *d = opaque;
+    if (whence & AVSEEK_SIZE) {
+        return d->io.seek(d->io.opaque, 0, FFAUDIO_SEEK_SIZE);
+    }
+    int64_t r = d->io.seek(d->io.opaque, offset, whence & ~AVSEEK_FORCE);
+    return r < 0 ? AVERROR(EIO) : r;
+}
+
+FFAudioDecoder *ffaudio_open_io(
+    FFAudioIOCallbacks callbacks, int64_t probe_size_bytes, int32_t *out_status) {
+    if (out_status) *out_status = FFAUDIO_OK;
+    if (!callbacks.read) {
+        if (out_status) *out_status = FFAUDIO_ERR_ARG;
+        return NULL;
+    }
+
+    FFAudioDecoder *d = calloc(1, sizeof(FFAudioDecoder));
+    if (!d) {
+        if (out_status) *out_status = FFAUDIO_ERR_ALLOC;
+        return NULL;
+    }
+    d->audio_stream_index = -1;
+    d->io = callbacks;
+
+    const int buffer_size = 64 * 1024;
+    unsigned char *buffer = av_malloc(buffer_size);
+    if (buffer) {
+        d->avio = avio_alloc_context(
+            buffer, buffer_size, 0, d,
+            ffaudio_io_read, NULL,
+            callbacks.seek ? ffaudio_io_seek : NULL);
+    }
+    if (!d->avio) {
+        av_free(buffer);
+        if (out_status) *out_status = FFAUDIO_ERR_ALLOC;
+        ffaudio_free_internal(d);
+        return NULL;
+    }
+    if (!callbacks.seek) {
+        d->avio->seekable = 0;
+    }
+
+    d->format_ctx = avformat_alloc_context();
+    if (!d->format_ctx) {
+        if (out_status) *out_status = FFAUDIO_ERR_ALLOC;
+        ffaudio_free_internal(d);
+        return NULL;
+    }
+    d->format_ctx->pb = d->avio;
+    d->format_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+    if (probe_size_bytes > 0) {
+        d->format_ctx->probesize = probe_size_bytes;
+    }
+
+    // 失败时 avformat_open_input 会释放 format_ctx 并置 NULL，avio 仍由我们释放。
+    if (avformat_open_input(&d->format_ctx, NULL, NULL, NULL) < 0) {
+        if (out_status) *out_status = FFAUDIO_ERR_OPEN;
+        ffaudio_free_internal(d);
+        return NULL;
+    }
+    return ffaudio_finish_open(d, out_status);
+}
+
+// 已打开 format_ctx 之后的公共流程：找流、建解码器与重采样器。
+static FFAudioDecoder *ffaudio_finish_open(FFAudioDecoder *d, int32_t *out_status) {
     if (avformat_find_stream_info(d->format_ctx, NULL) < 0) {
         if (out_status) *out_status = FFAUDIO_ERR_OPEN;
         ffaudio_free_internal(d);
@@ -185,7 +273,8 @@ static int ffaudio_fill_hold(FFAudioDecoder *d) {
                 return 0;
             }
             int got_packet = 0;
-            while (av_read_frame(d->format_ctx, d->packet) >= 0) {
+            int rr;
+            while ((rr = av_read_frame(d->format_ctx, d->packet)) >= 0) {
                 if (d->packet->stream_index == d->audio_stream_index) {
                     int sr = avcodec_send_packet(d->codec_ctx, d->packet);
                     av_packet_unref(d->packet);
@@ -194,6 +283,12 @@ static int ffaudio_fill_hold(FFAudioDecoder *d) {
                     break;
                 }
                 av_packet_unref(d->packet);
+            }
+            // 输入层读取失败（如网络中断）不能当作文件尾，否则曲目会被静默截断。
+            // 仅看 pb->error：容器尾部数据损坏等解析错误仍按文件尾处理。
+            if (!got_packet && rr != AVERROR_EOF
+                && d->format_ctx->pb && d->format_ctx->pb->error < 0) {
+                return FFAUDIO_ERR_IO;
             }
             if (!got_packet) {
                 // 输入结束，冲刷解码器。

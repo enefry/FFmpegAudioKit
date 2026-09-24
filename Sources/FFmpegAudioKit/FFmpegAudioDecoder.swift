@@ -121,6 +121,7 @@ public final class FFmpegAudioDecoder: @unchecked Sendable {
     public func seek(to position: Duration) throws {
         let ms = Int64(position.components.seconds * 1000
             + position.components.attoseconds / 1_000_000_000_000_000)
+        ioBox?.lastError = nil
         let status = ffaudio_seek_ms(handle, ms)
         if status != FFAUDIO_OK.rawValue {
             if let error = ioBox?.lastError {

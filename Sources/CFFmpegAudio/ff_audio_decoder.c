@@ -331,6 +331,13 @@ int32_t ffaudio_read_float(FFAudioDecoder *d, float *out, int32_t max_frames) {
 int32_t ffaudio_seek_ms(FFAudioDecoder *d, int64_t position_ms) {
     if (!d) return FFAUDIO_ERR_ARG;
     int64_t ts = position_ms * (AV_TIME_BASE / 1000);
+    // 自定义 IO 上一次读取可能因 seek 打断而失败；pb 的错误/EOF 是粘滞的，
+    // 不清掉会让 seek 后的读取立即失败。
+    AVIOContext *pb = d->format_ctx->pb;
+    if (pb) {
+        pb->error = 0;
+        pb->eof_reached = 0;
+    }
     if (avformat_seek_file(d->format_ctx, -1, INT64_MIN, ts, INT64_MAX, 0) < 0) {
         return FFAUDIO_ERR_SEEK;
     }

@@ -384,17 +384,16 @@ static int32_t ffaudio_reopen_at_start(FFAudioDecoder *d) {
     return FFAUDIO_OK;
 }
 
-int32_t ffaudio_seek_ms(FFAudioDecoder *d, int64_t position_ms) {
+int32_t ffaudio_seek_us(FFAudioDecoder *d, int64_t position_us) {
     if (!d) return FFAUDIO_ERR_ARG;
-    if (position_ms < 0 || position_ms > INT64_MAX / (AV_TIME_BASE / 1000)) {
+    if (position_us < 0) {
         return FFAUDIO_ERR_ARG;
     }
-    if (position_ms == 0) return ffaudio_reopen_at_start(d);
+    if (position_us == 0) return ffaudio_reopen_at_start(d);
     // Give stateful codecs (e.g. AAC) preceding packets to warm their synthesis
     // filter after avcodec_flush_buffers. Their first frame can be inaccurate
     // even when its PTS is correct. The staging path discards all preroll PCM.
-    int64_t demux_ms = position_ms - 120;
-    int64_t ts = demux_ms * (AV_TIME_BASE / 1000);
+    int64_t demux_us = position_us > 120000 ? position_us - 120000 : 0;
     // 自定义 IO 上一次读取可能因 seek 打断而失败；pb 的错误/EOF 是粘滞的，
     // 不清掉会让 seek 后的读取立即失败。
     AVIOContext *pb = d->format_ctx->pb;
@@ -405,15 +404,15 @@ int32_t ffaudio_seek_ms(FFAudioDecoder *d, int64_t position_ms) {
     // Constrain the demuxer to a point at or before the target; the decoder
     // discards keyframe preroll by timestamp in ffaudio_stage_frame.
     int seek_result = avformat_seek_file(
-        d->format_ctx, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD);
+        d->format_ctx, -1, INT64_MIN, demux_us, demux_us, AVSEEK_FLAG_BACKWARD);
     if (seek_result < 0) {
         // Some demuxers have no usable index at this exact point (FLAC near
         // EOF, for example). Try earlier indexed positions, then decode and
         // discard every frame preceding seek_target_frame.
-        int64_t fallback_ms = position_ms > 1000 ? position_ms - 1000 : 0;
+        int64_t fallback_us = position_us > 1000000 ? position_us - 1000000 : 0;
         seek_result = avformat_seek_file(
             d->format_ctx, -1, INT64_MIN,
-            fallback_ms * (AV_TIME_BASE / 1000), INT64_MAX,
+            fallback_us, INT64_MAX,
             AVSEEK_FLAG_BACKWARD);
     }
     if (seek_result < 0) return FFAUDIO_ERR_SEEK;
@@ -421,11 +420,18 @@ int32_t ffaudio_seek_ms(FFAudioDecoder *d, int64_t position_ms) {
     d->hold_frames = 0;
     d->hold_offset = 0;
     d->reached_eof = 0;
-    d->seek_target_frame = av_rescale_rnd(position_ms, d->sample_rate, 1000, AV_ROUND_UP);
+    d->seek_target_frame = av_rescale_rnd(position_us, d->sample_rate, AV_TIME_BASE, AV_ROUND_UP);
     d->seek_pending = 1;
     swr_close(d->swr);
     if (swr_init(d->swr) < 0) return FFAUDIO_ERR_RESAMPLER;
     return FFAUDIO_OK;
+}
+
+int32_t ffaudio_seek_ms(FFAudioDecoder *d, int64_t position_ms) {
+    if (position_ms < 0 || position_ms > INT64_MAX / (AV_TIME_BASE / 1000)) {
+        return FFAUDIO_ERR_ARG;
+    }
+    return ffaudio_seek_us(d, position_ms * (AV_TIME_BASE / 1000));
 }
 
 void ffaudio_close(FFAudioDecoder *d) {

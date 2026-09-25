@@ -5,6 +5,10 @@ name: Release
 # 一起提交，保证 tag 指向的清单与 Release 产物一一对应。
 
 on:
+  # Register the workflow on the default branch without starting a release.
+  push:
+    paths:
+      - .github/workflows/release.yml
   workflow_dispatch:
     inputs:
       version:
@@ -21,6 +25,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     timeout-minutes: 120
     env:

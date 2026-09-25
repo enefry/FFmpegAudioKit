@@ -20,7 +20,8 @@ let releaseBinaryChecksum = "da5b8ff4466c531f667c67bbc6f9fe3cd6beb9c5f8ef5e591f5
 
 let localBinaryPath = "Artifacts/FFmpegAudio.xcframework"
 let usesLocalBinary = FileManager.default.fileExists(
-    atPath: Context.packageDirectory + "/" + localBinaryPath
+    atPath: URL(fileURLWithPath: Context.packageDirectory)
+        .appendingPathComponent(localBinaryPath).path
 )
 let ffmpegBinary: Target = usesLocalBinary
     ? .binaryTarget(name: "FFmpegAudio", path: localBinaryPath)
@@ -58,7 +59,8 @@ let package = Package(
         ),
         .testTarget(
             name: "FFmpegAudioKitTests",
-            dependencies: ["FFmpegAudioKit"]
+            dependencies: ["FFmpegAudioKit"],
+            resources: [.copy("Fixtures/dsd-quarter-second.dsf")]
         )
     ]
 )

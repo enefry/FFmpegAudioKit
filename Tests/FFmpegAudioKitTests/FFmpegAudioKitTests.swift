@@ -8,6 +8,14 @@ final class FFmpegAudioKitTests: XCTestCase {
         ProcessInfo.processInfo.environment["SAMPLE_AUDIO"].map { URL(fileURLWithPath: $0) }
     }
 
+    func testPackagedBinaryDecodesDSF() throws {
+        let url = Bundle.module.bundleURL.appendingPathComponent("dsd-quarter-second.dsf")
+        let probe = try FFmpegProbe.probe(localFileURL: url)
+        XCTAssertTrue(probe.tracks.contains { $0.codec == "dsd_lsbf_planar" && $0.isDecodable })
+        let decoder = try FFmpegAudioDecoder(localFileURL: url)
+        XCTAssertGreaterThan(try decoder.nextBuffer()?.frameLength ?? 0, 0)
+    }
+
     func testProbeReadsContainerAndDuration() throws {
         guard let url = sampleURL else {
             throw XCTSkip("设置 SAMPLE_AUDIO 环境变量指向本地音频文件后再运行")

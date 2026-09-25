@@ -151,7 +151,25 @@ jobs:
             --title "FFmpegAudioKit $VERSION" \
             --notes-file release-notes.md
 
+      - name: Check out release tag for verification
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          path: release-verification
+
       - name: Verify package resolves from the release
+        working-directory: release-verification
+        env:
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
         run: |
-          rm -rf Artifacts/FFmpegAudio.xcframework .build-xcode
-          xcodebuild build -scheme FFmpegAudioKit -destination 'generic/platform=iOS Simulator' -derivedDataPath .build-xcode
+          test ! -e Artifacts/FFmpegAudio.xcframework
+          mkdir -p "$GITHUB_WORKSPACE/.noindex/artifacts/release-verification"
+          gh release download "$VERSION" --pattern "$ZIP_NAME" \
+            --dir "$GITHUB_WORKSPACE/.noindex/artifacts/release-verification"
+          actual_checksum=$(swift package compute-checksum "$GITHUB_WORKSPACE/.noindex/artifacts/release-verification/$ZIP_NAME")
+          if [ "$actual_checksum" != "$CHECKSUM" ]; then
+            echo "::error::Release asset checksum mismatch: expected $CHECKSUM, got $actual_checksum"
+            exit 1
+          fi
+          xcodebuild build -scheme FFmpegAudioKit -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$GITHUB_WORKSPACE/.noindex/DerivedData/release-verification"

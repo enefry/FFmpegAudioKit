@@ -338,6 +338,8 @@ static int ffaudio_fill_hold(FFAudioDecoder *d) {
     }
 }
 
+static int32_t ffaudio_seek_by_decoding(FFAudioDecoder *d, int64_t target_frame);
+
 int32_t ffaudio_read_float(FFAudioDecoder *d, float *out, int32_t max_frames) {
     if (!d || !out || max_frames <= 0) return FFAUDIO_ERR_ARG;
 
@@ -345,6 +347,10 @@ int32_t ffaudio_read_float(FFAudioDecoder *d, float *out, int32_t max_frames) {
     while (produced < max_frames) {
         if (d->hold_frames - d->hold_offset <= 0) {
             int r = ffaudio_fill_hold(d);
+            if (r == FFAUDIO_ERR_SEEK && d->seek_pending && produced == 0) {
+                r = ffaudio_seek_by_decoding(d, d->seek_target_frame);
+                if (r == FFAUDIO_OK) continue;
+            }
             if (r < 0) return r;
             if (r == 0) break; // EOF
         }
@@ -384,12 +390,42 @@ static int32_t ffaudio_reopen_at_start(FFAudioDecoder *d) {
     return FFAUDIO_OK;
 }
 
+// Containers without usable frame timestamps can still seek accurately by
+// counting decoded PCM frames from the start. This is slower for long tracks.
+static int32_t ffaudio_seek_by_decoding(FFAudioDecoder *d, int64_t target_frame) {
+    int32_t status = ffaudio_reopen_at_start(d);
+    if (status != FFAUDIO_OK) return status;
+    const int chunk_frames = 4096;
+    float *scratch = malloc((size_t)chunk_frames * d->channels * sizeof(float));
+    if (!scratch) return FFAUDIO_ERR_ALLOC;
+    int64_t remaining = target_frame;
+    while (remaining > 0) {
+        int want = remaining < chunk_frames ? (int)remaining : chunk_frames;
+        int32_t read = ffaudio_read_float(d, scratch, want);
+        if (read <= 0) {
+            free(scratch);
+            return read < 0 ? read : FFAUDIO_ERR_SEEK;
+        }
+        remaining -= read;
+    }
+    free(scratch);
+    return FFAUDIO_OK;
+}
+
 int32_t ffaudio_seek_us(FFAudioDecoder *d, int64_t position_us) {
     if (!d) return FFAUDIO_ERR_ARG;
     if (position_us < 0) {
         return FFAUDIO_ERR_ARG;
     }
     if (position_us == 0) return ffaudio_reopen_at_start(d);
+    int64_t target_frame = av_rescale_rnd(
+        position_us, d->sample_rate, AV_TIME_BASE, AV_ROUND_UP);
+    // WMA Lossless has sparse timestamps; Cook can report a timestamp without
+    // restoring its decoder state. Decode from zero for exact PCM in both.
+    if (d->codec_ctx->codec_id == AV_CODEC_ID_WMALOSSLESS
+        || d->codec_ctx->codec_id == AV_CODEC_ID_COOK) {
+        return ffaudio_seek_by_decoding(d, target_frame);
+    }
     // Give stateful codecs (e.g. AAC) preceding packets to warm their synthesis
     // filter after avcodec_flush_buffers. Their first frame can be inaccurate
     // even when its PTS is correct. The staging path discards all preroll PCM.
@@ -415,12 +451,12 @@ int32_t ffaudio_seek_us(FFAudioDecoder *d, int64_t position_us) {
             fallback_us, INT64_MAX,
             AVSEEK_FLAG_BACKWARD);
     }
-    if (seek_result < 0) return FFAUDIO_ERR_SEEK;
+    if (seek_result < 0) return ffaudio_seek_by_decoding(d, target_frame);
     avcodec_flush_buffers(d->codec_ctx);
     d->hold_frames = 0;
     d->hold_offset = 0;
     d->reached_eof = 0;
-    d->seek_target_frame = av_rescale_rnd(position_us, d->sample_rate, AV_TIME_BASE, AV_ROUND_UP);
+    d->seek_target_frame = target_frame;
     d->seek_pending = 1;
     swr_close(d->swr);
     if (swr_init(d->swr) < 0) return FFAUDIO_ERR_RESAMPLER;

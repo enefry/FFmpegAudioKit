@@ -23,12 +23,13 @@ Sources/FFmpegAudioKit/            通用 Swift API（零业务依赖）
 ## 依赖
 
 ```swift
-.package(url: "https://github.com/enefry/FFmpegAudioKit.git", from: "1.0.0")
+.package(url: "https://github.com/enefry/FFmpegAudioKit.git", from: "0.0.3")
 ```
 
 预编译的 `FFmpegAudio.xcframework.zip` 随 [GitHub Release](https://github.com/enefry/FFmpegAudioKit/releases)
 发布，`Package.swift` 中固定了对应版本的下载地址与 checksum，使用方无需本地编译 ffmpeg。
-若本地存在 `Artifacts/FFmpegAudio.xcframework`（跑过构建脚本），清单会优先使用本地产物。
+清单默认使用固定的 Release 资产。调试本地框架时显式设置
+`FFMPEG_AUDIO_USE_LOCAL_BINARY=1`，并重新解析包依赖。
 
 ## 发布
 

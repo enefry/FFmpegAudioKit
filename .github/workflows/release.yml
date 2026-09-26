@@ -78,6 +78,8 @@ jobs:
           fi
 
       - name: Test
+        env:
+          FFMPEG_AUDIO_USE_LOCAL_BINARY: "1"
         run: |
           udid=$(xcrun simctl list devices available -j | python3 -c '
           import json, sys
@@ -85,7 +87,7 @@ jobs:
           print(next(d["udid"] for runtime, items in devices.items() if "iOS" in runtime
                      for d in items if d["name"].startswith("iPhone")))')
           xcodebuild test -scheme FFmpegAudioKit -destination "id=$udid" -derivedDataPath .noindex/DerivedData
-          xcodebuild build -scheme FFmpegAudioKit -destination 'generic/platform=iOS' -derivedDataPath .noindex/DerivedData
+          FFMPEG_AUDIO_USE_LOCAL_BINARY=1 xcodebuild build -scheme FFmpegAudioKit -destination 'generic/platform=iOS' -derivedDataPath .noindex/DerivedData
 
       - name: Package
         id: package

@@ -13,13 +13,15 @@ import PackageDescription
 // 不含播放器：PCM 输出后的 AVAudioEngine 播放逻辑由使用方自行实现。
 
 // FFmpegAudio.xcframework 来源：
-//   - 本地跑过 Scripts/build-ffmpeg.sh（Artifacts/ 下存在产物）时直接用本地产物；
-//   - 否则使用 GitHub Release 上的预编译 zip。下面两行由 release workflow 自动改写。
+//   - 默认使用 GitHub Release 上的预编译 zip；
+//   - 仅显式设置 FFMPEG_AUDIO_USE_LOCAL_BINARY=1 时使用 Artifacts/ 下的本地产物。
+// 下面两行由 release workflow 自动改写。
 let releaseBinaryURL = "https://github.com/enefry/FFmpegAudioKit/releases/download/0.0.3/FFmpegAudio.xcframework.zip" // release:url
 let releaseBinaryChecksum = "83c9b404f93035e3ca15fccc164a4528d73f55da1d059c6c857ab8be94004141" // release:checksum
 
 let localBinaryPath = "Artifacts/FFmpegAudio.xcframework"
-let usesLocalBinary = FileManager.default.fileExists(
+let usesLocalBinary = ProcessInfo.processInfo.environment["FFMPEG_AUDIO_USE_LOCAL_BINARY"] == "1"
+    && FileManager.default.fileExists(
     atPath: URL(fileURLWithPath: Context.packageDirectory)
         .appendingPathComponent(localBinaryPath).path
 )

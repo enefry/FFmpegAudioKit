@@ -15,8 +15,8 @@ import PackageDescription
 // FFmpegAudio.xcframework 来源：
 //   - 本地跑过 Scripts/build-ffmpeg.sh（Artifacts/ 下存在产物）时直接用本地产物；
 //   - 否则使用 GitHub Release 上的预编译 zip。下面两行由 release workflow 自动改写。
-let releaseBinaryURL = "https://github.com/enefry/FFmpegAudioKit/releases/download/0.0.2/FFmpegAudio.xcframework.zip" // release:url
-let releaseBinaryChecksum = "da5b8ff4466c531f667c67bbc6f9fe3cd6beb9c5f8ef5e591f58d9b00d4b55e6" // release:checksum
+let releaseBinaryURL = "https://github.com/enefry/FFmpegAudioKit/releases/download/0.0.3/FFmpegAudio.xcframework.zip" // release:url
+let releaseBinaryChecksum = "83c9b404f93035e3ca15fccc164a4528d73f55da1d059c6c857ab8be94004141" // release:checksum
 
 let localBinaryPath = "Artifacts/FFmpegAudio.xcframework"
 let usesLocalBinary = FileManager.default.fileExists(

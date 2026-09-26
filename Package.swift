@@ -16,8 +16,8 @@ import PackageDescription
 //   - 默认使用 GitHub Release 上的预编译 zip；
 //   - 仅显式设置 FFMPEG_AUDIO_USE_LOCAL_BINARY=1 时使用 Artifacts/ 下的本地产物。
 // 下面两行由 release workflow 自动改写。
-let releaseBinaryURL = "https://github.com/enefry/FFmpegAudioKit/releases/download/0.0.3/FFmpegAudio.xcframework.zip" // release:url
-let releaseBinaryChecksum = "83c9b404f93035e3ca15fccc164a4528d73f55da1d059c6c857ab8be94004141" // release:checksum
+let releaseBinaryURL = "https://github.com/enefry/FFmpegAudioKit/releases/download/0.0.4/FFmpegAudio.xcframework.zip" // release:url
+let releaseBinaryChecksum = "1c65e5ec6be5329fc632847f914e602aa33cc1fd53908f0a498150a26fb2c9f8" // release:checksum
 
 let localBinaryPath = "Artifacts/FFmpegAudio.xcframework"
 let usesLocalBinary = ProcessInfo.processInfo.environment["FFMPEG_AUDIO_USE_LOCAL_BINARY"] == "1"

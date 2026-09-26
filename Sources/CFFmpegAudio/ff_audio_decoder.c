@@ -1,6 +1,7 @@
 #include "CFFmpegAudio.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <libavformat/avformat.h>
@@ -8,6 +9,7 @@
 #include <libavutil/opt.h>
 #include <libavutil/dict.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/mathematics.h>
 #include <libswresample/swresample.h>
 
 // ============================================================================
@@ -26,6 +28,7 @@ struct FFAudioDecoder {
     int audio_stream_index;
     int channels;
     int sample_rate;
+    char *source_path; // local input; reopen for exact zero-position playback
 
     // 交错 Float32 暂存区：hold_frames 帧尚未被读走，从 hold_offset 帧开始。
     float *hold;
@@ -34,6 +37,10 @@ struct FFAudioDecoder {
     int hold_offset;
 
     int reached_eof;
+    // Seek is keyframe aligned. Decode leading samples but do not deliver
+    // them until the requested timeline frame is reached.
+    int64_t seek_target_frame;
+    int seek_pending;
 
     // 自定义输入（ffaudio_open_io）时持有；本地文件为 NULL。
     AVIOContext *avio;
@@ -53,6 +60,7 @@ static void ffaudio_free_internal(FFAudioDecoder *d) {
         avio_context_free(&d->avio);
     }
     free(d->hold);
+    free(d->source_path);
     free(d);
 }
 
@@ -71,6 +79,12 @@ FFAudioDecoder *ffaudio_open_file(const char *path, int32_t *out_status) {
         return NULL;
     }
     d->audio_stream_index = -1;
+    d->source_path = strdup(path);
+    if (!d->source_path) {
+        if (out_status) *out_status = FFAUDIO_ERR_ALLOC;
+        ffaudio_free_internal(d);
+        return NULL;
+    }
 
     if (avformat_open_input(&d->format_ctx, path, NULL, NULL) < 0) {
         if (out_status) *out_status = FFAUDIO_ERR_OPEN;
@@ -154,7 +168,11 @@ FFAudioDecoder *ffaudio_open_io(
 
 // 已打开 format_ctx 之后的公共流程：找流、建解码器与重采样器。
 static FFAudioDecoder *ffaudio_finish_open(FFAudioDecoder *d, int32_t *out_status) {
-    if (avformat_find_stream_info(d->format_ctx, NULL) < 0) {
+    int stream_status = avformat_find_stream_info(d->format_ctx, NULL);
+    if (stream_status < 0) {
+        char message[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(stream_status, message, sizeof(message));
+        av_log(d->format_ctx, AV_LOG_ERROR, "Could not read audio stream info: %s\n", message);
         if (out_status) *out_status = FFAUDIO_ERR_OPEN;
         ffaudio_free_internal(d);
         return NULL;
@@ -254,7 +272,23 @@ static int ffaudio_stage_frame(FFAudioDecoder *d) {
 
     d->hold_frames = converted;
     d->hold_offset = 0;
-    return converted;
+    if (d->seek_pending && converted > 0) {
+        AVStream *stream = d->format_ctx->streams[d->audio_stream_index];
+        int64_t pts = d->frame->best_effort_timestamp;
+        if (pts == AV_NOPTS_VALUE) return FFAUDIO_ERR_SEEK;
+        int64_t start = stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
+        int64_t frame_start = av_rescale_q_rnd(
+            pts - start, stream->time_base, (AVRational){ 1, d->sample_rate },
+            AV_ROUND_NEAR_INF);
+        int64_t skip = d->seek_target_frame - frame_start;
+        if (skip >= converted) {
+            d->hold_offset = converted;
+            return 0;
+        }
+        if (skip > 0) d->hold_offset = (int)skip;
+        d->seek_pending = 0;
+    }
+    return converted - d->hold_offset;
 }
 
 // 解码下一帧填入 hold：返回 1 拿到数据，0 到达文件尾，<0 错误。
@@ -328,9 +362,38 @@ int32_t ffaudio_read_float(FFAudioDecoder *d, float *out, int32_t max_frames) {
     return produced;
 }
 
-int32_t ffaudio_seek_ms(FFAudioDecoder *d, int64_t position_ms) {
+// Seeking to zero after a flush can bypass MP3/AAC encoder priming packets.
+// Reopening also restores the original skip-samples side data and decoder state.
+static int32_t ffaudio_reopen_at_start(FFAudioDecoder *d) {
+    int32_t status = FFAUDIO_OK;
+    FFAudioDecoder *fresh;
+    if (d->source_path) {
+        fresh = ffaudio_open_file(d->source_path, &status);
+    } else {
+        if (!d->io.seek || d->io.seek(d->io.opaque, 0, SEEK_SET) != 0) {
+            return FFAUDIO_ERR_SEEK;
+        }
+        fresh = ffaudio_open_io(d->io, d->format_ctx->probesize, &status);
+    }
+    if (!fresh) return status;
+    FFAudioDecoder old = *d;
+    *d = *fresh;
+    *fresh = old;
+    if (d->avio) d->avio->opaque = d;
+    ffaudio_free_internal(fresh);
+    return FFAUDIO_OK;
+}
+
+int32_t ffaudio_seek_us(FFAudioDecoder *d, int64_t position_us) {
     if (!d) return FFAUDIO_ERR_ARG;
-    int64_t ts = position_ms * (AV_TIME_BASE / 1000);
+    if (position_us < 0) {
+        return FFAUDIO_ERR_ARG;
+    }
+    if (position_us == 0) return ffaudio_reopen_at_start(d);
+    // Give stateful codecs (e.g. AAC) preceding packets to warm their synthesis
+    // filter after avcodec_flush_buffers. Their first frame can be inaccurate
+    // even when its PTS is correct. The staging path discards all preroll PCM.
+    int64_t demux_us = position_us > 120000 ? position_us - 120000 : 0;
     // 自定义 IO 上一次读取可能因 seek 打断而失败；pb 的错误/EOF 是粘滞的，
     // 不清掉会让 seek 后的读取立即失败。
     AVIOContext *pb = d->format_ctx->pb;
@@ -338,14 +401,37 @@ int32_t ffaudio_seek_ms(FFAudioDecoder *d, int64_t position_ms) {
         pb->error = 0;
         pb->eof_reached = 0;
     }
-    if (avformat_seek_file(d->format_ctx, -1, INT64_MIN, ts, INT64_MAX, 0) < 0) {
-        return FFAUDIO_ERR_SEEK;
+    // Constrain the demuxer to a point at or before the target; the decoder
+    // discards keyframe preroll by timestamp in ffaudio_stage_frame.
+    int seek_result = avformat_seek_file(
+        d->format_ctx, -1, INT64_MIN, demux_us, demux_us, AVSEEK_FLAG_BACKWARD);
+    if (seek_result < 0) {
+        // Some demuxers have no usable index at this exact point (FLAC near
+        // EOF, for example). Try earlier indexed positions, then decode and
+        // discard every frame preceding seek_target_frame.
+        int64_t fallback_us = position_us > 1000000 ? position_us - 1000000 : 0;
+        seek_result = avformat_seek_file(
+            d->format_ctx, -1, INT64_MIN,
+            fallback_us, INT64_MAX,
+            AVSEEK_FLAG_BACKWARD);
     }
+    if (seek_result < 0) return FFAUDIO_ERR_SEEK;
     avcodec_flush_buffers(d->codec_ctx);
     d->hold_frames = 0;
     d->hold_offset = 0;
     d->reached_eof = 0;
+    d->seek_target_frame = av_rescale_rnd(position_us, d->sample_rate, AV_TIME_BASE, AV_ROUND_UP);
+    d->seek_pending = 1;
+    swr_close(d->swr);
+    if (swr_init(d->swr) < 0) return FFAUDIO_ERR_RESAMPLER;
     return FFAUDIO_OK;
+}
+
+int32_t ffaudio_seek_ms(FFAudioDecoder *d, int64_t position_ms) {
+    if (position_ms < 0 || position_ms > INT64_MAX / (AV_TIME_BASE / 1000)) {
+        return FFAUDIO_ERR_ARG;
+    }
+    return ffaudio_seek_us(d, position_ms * (AV_TIME_BASE / 1000));
 }
 
 void ffaudio_close(FFAudioDecoder *d) {

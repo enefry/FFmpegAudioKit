@@ -72,6 +72,10 @@ int32_t ffaudio_read_float(FFAudioDecoder *decoder, float *out, int32_t max_fram
 /// seek 到指定毫秒位置。返回 FFAUDIO_OK 或负错误码。
 int32_t ffaudio_seek_ms(FFAudioDecoder *decoder, int64_t position_ms);
 
+/// seek 到指定微秒位置。用于保留 CUE 75 帧/秒时间戳的亚毫秒精度。
+/// 返回 FFAUDIO_OK 或负错误码。
+int32_t ffaudio_seek_us(FFAudioDecoder *decoder, int64_t position_us);
+
 /// 释放句柄。传入 NULL 安全。
 void ffaudio_close(FFAudioDecoder *decoder);
 

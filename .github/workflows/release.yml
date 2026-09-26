@@ -84,8 +84,8 @@ jobs:
           devices = json.load(sys.stdin)["devices"]
           print(next(d["udid"] for runtime, items in devices.items() if "iOS" in runtime
                      for d in items if d["name"].startswith("iPhone")))')
-          xcodebuild test -scheme FFmpegAudioKit -destination "id=$udid" -derivedDataPath .build-xcode
-          xcodebuild build -scheme FFmpegAudioKit -destination 'generic/platform=iOS' -derivedDataPath .build-xcode
+          xcodebuild test -scheme FFmpegAudioKit -destination "id=$udid" -derivedDataPath .noindex/DerivedData
+          xcodebuild build -scheme FFmpegAudioKit -destination 'generic/platform=iOS' -derivedDataPath .noindex/DerivedData
 
       - name: Package
         id: package

@@ -119,10 +119,17 @@ public final class FFmpegAudioDecoder: @unchecked Sendable {
 
     /// seek 到指定位置；随后 `nextBuffer` 从该位置继续。
     public func seek(to position: Duration) throws {
-        let ms = Int64(position.components.seconds * 1000
-            + position.components.attoseconds / 1_000_000_000_000_000)
+        let components = position.components
+        guard position >= .zero,
+              components.seconds <= Int64.max / 1_000_000 else {
+            throw DecoderError.open(FFAUDIO_ERR_ARG.rawValue)
+        }
+        let (us, overflow) = (components.seconds * 1_000_000).addingReportingOverflow(
+            components.attoseconds / 1_000_000_000_000
+        )
+        guard !overflow else { throw DecoderError.open(FFAUDIO_ERR_ARG.rawValue) }
         ioBox?.lastError = nil
-        let status = ffaudio_seek_ms(handle, ms)
+        let status = ffaudio_seek_us(handle, us)
         if status != FFAUDIO_OK.rawValue {
             if let error = ioBox?.lastError {
                 ioBox?.lastError = nil

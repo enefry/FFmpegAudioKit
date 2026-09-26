@@ -8,6 +8,7 @@ Artifacts/*.xcframework
 
 # SwiftPM
 .build/
+.noindex/
 .swiftpm/
 *.xcodeproj
 

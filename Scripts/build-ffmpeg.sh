@@ -53,7 +53,7 @@ DECODERS="aac,aac_latm,aac_at,mp3,mp3float,mp3_at,flac,alac,alac_at,vorbis,opus,
 pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_f32le,pcm_u8,\
 ac3,ac3_at,eac3,dca,ape,wavpack,tta,tak,mpc7,mpc8,cook,als,wmav1,wmav2,wmalossless,wmapro,\
 dsd_lsbf,dsd_msbf,dsd_lsbf_planar,dsd_msbf_planar"
-DEMUXERS="aac,mp3,flac,ogg,wav,w64,aiff,au,caf,mov,matroska,ape,asf,wv,tta,tak,dsf,mpc,mpc8,ac3,eac3,dts"
+DEMUXERS="aac,mp3,flac,ogg,wav,w64,aiff,au,caf,mov,matroska,ape,asf,rm,wv,tta,tak,dsf,mpc,mpc8,ac3,eac3,dts"
 PARSERS="aac,aac_latm,mpegaudio,flac,vorbis,opus,ac3,dca,cook,tak"
 
 # --- 1. 下载 + 解压源码（缓存） ---------------------------------------------

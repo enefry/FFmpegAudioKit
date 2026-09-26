@@ -418,6 +418,14 @@ int32_t ffaudio_seek_us(FFAudioDecoder *d, int64_t position_us) {
         return FFAUDIO_ERR_ARG;
     }
     if (position_us == 0) return ffaudio_reopen_at_start(d);
+    int64_t target_frame = av_rescale_rnd(
+        position_us, d->sample_rate, AV_TIME_BASE, AV_ROUND_UP);
+    // WMA Lossless has sparse timestamps; Cook can report a timestamp without
+    // restoring its decoder state. Decode from zero for exact PCM in both.
+    if (d->codec_ctx->codec_id == AV_CODEC_ID_WMALOSSLESS
+        || d->codec_ctx->codec_id == AV_CODEC_ID_COOK) {
+        return ffaudio_seek_by_decoding(d, target_frame);
+    }
     // Give stateful codecs (e.g. AAC) preceding packets to warm their synthesis
     // filter after avcodec_flush_buffers. Their first frame can be inaccurate
     // even when its PTS is correct. The staging path discards all preroll PCM.
@@ -443,8 +451,6 @@ int32_t ffaudio_seek_us(FFAudioDecoder *d, int64_t position_us) {
             fallback_us, INT64_MAX,
             AVSEEK_FLAG_BACKWARD);
     }
-    int64_t target_frame = av_rescale_rnd(
-        position_us, d->sample_rate, AV_TIME_BASE, AV_ROUND_UP);
     if (seek_result < 0) return ffaudio_seek_by_decoding(d, target_frame);
     avcodec_flush_buffers(d->codec_ctx);
     d->hold_frames = 0;
